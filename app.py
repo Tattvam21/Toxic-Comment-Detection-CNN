@@ -1,25 +1,27 @@
 # app.py
 # Streamlit Toxic Comment Detection — Text CNN (Keras)
-# Artifacts expected in ./artifacts: text_cnn_toxic.keras, tokenizer.json, thresholds.npy
+# Expects artifacts in ./artifacts : text_cnn_toxic.keras, tokenizer.json, thresholds.npy (optional)
 
-import os, sys, json, re
+import os, sys, re
 from pathlib import Path
+import json
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-# -------- Page config --------
+# ---------------- Page & constants ----------------
 st.set_page_config(page_title="Toxic Comment Detection — Text CNN", page_icon="🧪", layout="wide")
 
 LABELS = ['toxic','severe_toxic','obscene','threat','insult','identity_hate']
 MAX_LEN = 200
 ART_DIR = Path("./artifacts")
 
-# -------- Cleaner (same as notebook) --------
+# ---------------- Cleaner (same as notebook) ----------------
 URL_RE  = re.compile(r'http\\S+|www\\.\\S+')
 USER_RE = re.compile(r'@\\w+')
 HTML_RE = re.compile(r'<.*?>')
 SPACE_RE= re.compile(r'\\s+')
+
 def clean_text(s: str) -> str:
     if not isinstance(s, str): return ""
     s = s.lower()
@@ -29,10 +31,10 @@ def clean_text(s: str) -> str:
     s = SPACE_RE.sub(' ', s).strip()
     return s
 
-# -------- Cached loader (lazy TF import) --------
+# ---------------- Cached loader (lazy TensorFlow import) ----------------
 @st.cache_resource(show_spinner=True)
 def load_model_and_tokenizer(art_dir: Path):
-    # Quieter TF, CPU-only
+    # Quieter TF, CPU-only (good defaults for Streamlit & local)
     os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -44,15 +46,23 @@ def load_model_and_tokenizer(art_dir: Path):
     tok_path   = art_dir / "tokenizer.json"
     thr_path   = art_dir / "thresholds.npy"
 
-    if not model_path.exists() or not tok_path.exists():
-        raise FileNotFoundError(
-            f"Missing artifacts in {art_dir.resolve()} "
-            "(need text_cnn_toxic.keras and tokenizer.json; thresholds.npy optional)."
-        )
+    if not model_path.exists():
+        raise FileNotFoundError(f"Missing artifact: {model_path}")
+    if not tok_path.exists():
+        raise FileNotFoundError(f"Missing artifact: {tok_path}")
 
-    model = tf.keras.models.load_model(model_path, compile=False)
-    tokenizer = tokenizer_from_json(json.loads(tok_path.read_text()))
+    # ✅ IMPORTANT: tokenizer_from_json expects a JSON **string**
+    tok_text = tok_path.read_text()
+    tokenizer = tokenizer_from_json(tok_text)
+
+    # thresholds are optional; default to 0.5 if absent
     thresholds = np.load(thr_path) if thr_path.exists() else np.full((len(LABELS),), 0.5, dtype=float)
+    if thresholds.shape[0] != len(LABELS):
+        raise ValueError(f"thresholds.npy shape {thresholds.shape} does not match {len(LABELS)} labels")
+
+    # Load model
+    model = tf.keras.models.load_model(model_path, compile=False)
+
     return model, tokenizer, thresholds, pad_sequences
 
 def predict_one(text: str, model, tokenizer, pad_sequences, thresholds: np.ndarray):
@@ -65,11 +75,11 @@ def predict_one(text: str, model, tokenizer, pad_sequences, thresholds: np.ndarr
     tox_score = float(probs.max())                         # simple overall score = max label prob
     return probs, preds, is_toxic, tox_score
 
-# -------- Header --------
+# ---------------- Header ----------------
 st.title("🧪 Toxic Comment Detection — Text CNN")
-st.caption("Type a comment below and get a TOXIC / NOT TOXIC decision (and per-label probabilities).")
+st.caption("Type a comment and get a TOXIC / NOT TOXIC decision (and per-label probabilities).")
 
-# -------- Environment & artifacts (for quick sanity) --------
+# ---------------- Environment & artifacts (helpful for debugging) ----------------
 with st.expander("Environment & Artifacts"):
     st.write("**Python:**", sys.version)
     st.write("**Working directory:**", Path.cwd())
@@ -79,31 +89,27 @@ with st.expander("Environment & Artifacts"):
     except Exception as e:
         st.warning(f"Could not list artifacts: {e}")
 
-# Try to load model once; if it fails, we’ll still show the text box and error.
-load_error = None
-model = tokenizer = thresholds = pad_sequences = None
-with st.spinner("Loading model…"):
+# ---------------- Load resources with visible errors ----------------
+with st.spinner("Loading model & tokenizer..."):
     try:
         model, tokenizer, thresholds, pad_sequences = load_model_and_tokenizer(ART_DIR)
-        st.success("Model loaded.")
+        st.success("Model & tokenizer loaded.")
+        load_error = None
     except Exception as e:
         load_error = e
-        st.error("Model failed to load. You can still type below; prediction will be disabled.")
+        st.error("Startup error while loading artifacts / TensorFlow.")
         st.exception(e)
 
-# -------- Simple center UI --------
+# ---------------- Simple center UI ----------------
 user_text = st.text_area("Enter a comment:", height=140, placeholder="e.g., You're clueless and incompetent, just stop talking.")
 
-colA, colB = st.columns([1,2])
-with colA:
-    thr_any = st.slider("Decision threshold (applied per label)", 0.1, 0.9, float(thresholds.mean()) if isinstance(thresholds, np.ndarray) else 0.5, 0.05)
-    # allow quick override of thresholds if desired
-    if isinstance(thresholds, np.ndarray):
-        thresholds = np.full_like(thresholds, thr_any, dtype=float)
+# Optional: quick global threshold override
+thr_default = float(thresholds.mean()) if isinstance(thresholds, np.ndarray) else 0.5
+thr_any = st.slider("Decision threshold (applied per label)", 0.1, 0.9, thr_default, 0.05)
+if isinstance(thresholds, np.ndarray):
+    thresholds = np.full_like(thresholds, thr_any, dtype=float)
 
-clicked = st.button("Predict", type="primary")
-
-if clicked:
+if st.button("Predict", type="primary"):
     if load_error is not None:
         st.warning("Model not available — fix the error above, then try again.")
     elif not user_text.strip():
