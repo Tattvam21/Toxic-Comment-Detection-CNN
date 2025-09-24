@@ -79,7 +79,26 @@ def predict_one(text: str, model, tokenizer, pad_sequences, thresholds: np.ndarr
 st.title("🧪 Toxic Comment Detection — Text CNN")
 st.caption("Type a comment and get a TOXIC / NOT TOXIC decision (and per-label probabilities).")
 
+# ---------------- Environment & artifacts (helpful for debugging) ----------------
+with st.expander("Environment & Artifacts"):
+    st.write("**Python:**", sys.version)
+    st.write("**Working directory:**", Path.cwd())
+    st.write("**Artifacts dir:**", ART_DIR.resolve())
+    try:
+        st.write("**Files in artifacts:**", [p.name for p in ART_DIR.iterdir()])
+    except Exception as e:
+        st.warning(f"Could not list artifacts: {e}")
 
+# ---------------- Load resources with visible errors ----------------
+with st.spinner("Loading model & tokenizer..."):
+    try:
+        model, tokenizer, thresholds, pad_sequences = load_model_and_tokenizer(ART_DIR)
+        st.success("Model & tokenizer loaded.")
+        load_error = None
+    except Exception as e:
+        load_error = e
+        st.error("Startup error while loading artifacts / TensorFlow.")
+        st.exception(e)
 
 # ---------------- Simple center UI ----------------
 user_text = st.text_area("Enter a comment:", height=140, placeholder="e.g., You're clueless and incompetent, just stop talking.")
